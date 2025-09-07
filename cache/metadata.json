@@ -398,5 +398,29 @@
     "checksum": "0ac91f71b32b13a5a61debb0149f7973",
     "size_bytes": 389,
     "access_count": 0
+  },
+  "9056bfdd8a25e46a": {
+    "state_id": "9056bfdd8a25e46a",
+    "state_type": "business_questions",
+    "created_at": "2025-09-07T13:34:51.842832",
+    "last_accessed": "2025-09-07T13:34:51.842832",
+    "last_modified": "2025-09-07T13:34:51.842832",
+    "ttl_hours": 6,
+    "dependencies": [],
+    "checksum": "75533b31e60db7881c7d56cfa5316cdc",
+    "size_bytes": 1278,
+    "access_count": 0
+  },
+  "76690371f3af3d09": {
+    "state_id": "76690371f3af3d09",
+    "state_type": "business_questions",
+    "created_at": "2025-09-07T13:34:51.843685",
+    "last_accessed": "2025-09-07T13:34:51.843685",
+    "last_modified": "2025-09-07T13:34:51.843685",
+    "ttl_hours": 6,
+    "dependencies": [],
+    "checksum": "0636e0187dd04a80e37206848dcc91e9",
+    "size_bytes": 1038,
+    "access_count": 0
   }
 }

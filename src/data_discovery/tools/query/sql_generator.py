@@ -6,7 +6,7 @@ SQL Generator Tool for converting business questions into optimized SQL queries.
 Transforms business question templates into executable SQL with performance optimizations,
 parameter validation, and intelligent query planning based on statistical profiles.
 """
-
+import statistics
 import time
 import re
 import hashlib
@@ -173,11 +173,13 @@ class SQLGenerator:
         # Check cache first
         cache_key = f"generated_query_{business_question.question_id}_{optimization_level.value}"
         if not force_refresh:
-            cached_query = self.state_manager.load_state(cache_key, StateType.GENERATED_QUERIES)
+            cached_query = self.state_manager.load_state(cache_key, StateType.BUSINESS_QUESTIONS)
             if cached_query:
-                self.logger.info("Using cached generated query",
-                                 question_id=business_question.question_id)
-                return self._dict_to_generated_query(cached_query)
+                cached_result = self._dict_to_generated_query(cached_query)
+                if cached_result:  # Only use cache if conversion successful
+                    self.logger.info("Using cached generated query",
+                                     question_id=business_question.question_id)
+                    return cached_result
 
         self.logger.info("Generating SQL from business question",
                          question_id=business_question.question_id,
@@ -237,7 +239,7 @@ class SQLGenerator:
             self.state_manager.save_state(
                 cache_key,
                 generated_query.to_dict(),
-                StateType.GENERATED_QUERIES,
+                StateType.BUSINESS_QUESTIONS,
                 ttl_hours=6
             )
 
@@ -588,9 +590,8 @@ class SQLGenerator:
 
     def _dict_to_generated_query(self, data: Dict[str, Any]) -> GeneratedQuery:
         """Convert dictionary back to GeneratedQuery object."""
-        # This would implement the reverse conversion
-        # For now, return a placeholder
-        raise NotImplementedError("Cache deserialization not yet implemented")
+        # For now, return None to skip cache loading - implement full deserialization later
+        return None
 
     def validate_query(self, sql_query: str) -> Dict[str, Any]:
         """Validate SQL query without executing it."""
