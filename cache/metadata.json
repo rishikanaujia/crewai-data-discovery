@@ -422,5 +422,89 @@
     "checksum": "0636e0187dd04a80e37206848dcc91e9",
     "size_bytes": 1038,
     "access_count": 0
+  },
+  "c59403d0748321cf": {
+    "state_id": "c59403d0748321cf",
+    "state_type": "agent_progress",
+    "created_at": "2025-09-07T13:47:27.940993",
+    "last_accessed": "2025-09-07T13:47:27.940993",
+    "last_modified": "2025-09-07T13:47:27.940993",
+    "ttl_hours": 24,
+    "dependencies": [],
+    "checksum": "45356b7c159b9235ecb1676f70e0c161",
+    "size_bytes": 819,
+    "access_count": 0
+  },
+  "7a933fc32f85cb04": {
+    "state_id": "7a933fc32f85cb04",
+    "state_type": "business_questions",
+    "created_at": "2025-09-07T13:47:30.252836",
+    "last_accessed": "2025-09-07T13:47:30.252836",
+    "last_modified": "2025-09-07T13:47:30.252836",
+    "ttl_hours": 6,
+    "dependencies": [],
+    "checksum": "5b5f6e92598a27d8618086c7538b41fe",
+    "size_bytes": 905,
+    "access_count": 0
+  },
+  "1081f7a80b9b924a": {
+    "state_id": "1081f7a80b9b924a",
+    "state_type": "agent_progress",
+    "created_at": "2025-09-07T13:47:30.900115",
+    "last_accessed": "2025-09-07T13:47:30.900777",
+    "last_modified": "2025-09-07T13:47:30.900115",
+    "ttl_hours": 6,
+    "dependencies": [],
+    "checksum": "b36d4fe6324f28a5e4e998613b7c5237",
+    "size_bytes": 1965,
+    "access_count": 1
+  },
+  "21c5be435a27c928": {
+    "state_id": "21c5be435a27c928",
+    "state_type": "agent_progress",
+    "created_at": "2025-09-07T13:47:30.251233",
+    "last_accessed": "2025-09-07T13:47:30.251233",
+    "last_modified": "2025-09-07T13:47:30.251233",
+    "ttl_hours": 24,
+    "dependencies": [],
+    "checksum": "a9d7797892fe2ea83a6bb5d64a64212d",
+    "size_bytes": 822,
+    "access_count": 0
+  },
+  "28a8899127a4b86f": {
+    "state_id": "28a8899127a4b86f",
+    "state_type": "agent_progress",
+    "created_at": "2025-09-07T13:47:30.901689",
+    "last_accessed": "2025-09-07T13:47:30.901689",
+    "last_modified": "2025-09-07T13:47:30.901689",
+    "ttl_hours": 24,
+    "dependencies": [],
+    "checksum": "92320b908bb8d063abafa32ef183b8ab",
+    "size_bytes": 1237,
+    "access_count": 0
+  },
+  "a23b7aaa29f781f7": {
+    "state_id": "a23b7aaa29f781f7",
+    "state_type": "agent_progress",
+    "created_at": "2025-09-07T13:47:30.901017",
+    "last_accessed": "2025-09-07T13:47:30.901017",
+    "last_modified": "2025-09-07T13:47:30.901017",
+    "ttl_hours": 12,
+    "dependencies": [],
+    "checksum": "c3becc5e248c7b1a45298777f6ec331a",
+    "size_bytes": 2317,
+    "access_count": 0
+  },
+  "50070ec0582c6491": {
+    "state_id": "50070ec0582c6491",
+    "state_type": "agent_progress",
+    "created_at": "2025-09-07T13:47:31.418374",
+    "last_accessed": "2025-09-07T13:47:31.418374",
+    "last_modified": "2025-09-07T13:47:31.418374",
+    "ttl_hours": 24,
+    "dependencies": [],
+    "checksum": "1a1e26a317ac7cdeff8131930be38c41",
+    "size_bytes": 704,
+    "access_count": 0
   }
 }

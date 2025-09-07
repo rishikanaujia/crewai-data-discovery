@@ -23,7 +23,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent))
 
-from config import get_config, SnowflakeConfig
+from core.config import get_config, SnowflakeConfig
 from logging_config import get_logger
 from exceptions import (
     DataDiscoveryException, SnowflakeConnectionError, DatabaseTimeoutError,

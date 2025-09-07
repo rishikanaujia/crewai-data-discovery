@@ -25,7 +25,7 @@ import sys
 
 sys.path.append(str(Path(__file__).parent))
 
-from config import get_config
+from core.config import get_config
 from logging_config import get_logger
 from exceptions import (
     DataDiscoveryException, CacheError, ErrorContext, ErrorSeverity

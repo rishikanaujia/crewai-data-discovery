@@ -521,6 +521,40 @@ class QueryGenerationError(ToolError):
         )
 
 
+class QueryExecutionError(ToolError):
+    """Errors during query execution on the database."""
+
+    def __init__(
+        self,
+        message: str,
+        sql_query: Optional[str] = None,
+        database: Optional[str] = None,
+        table: Optional[str] = None,
+        tool_name: str = "QueryExecutor",
+        **kwargs
+    ):
+        context = kwargs.pop("context", ErrorContext())
+        context.query = sql_query
+        context.database = database
+        context.table = table
+        recovery_suggestions = [
+            "Check SQL syntax and parameters",
+            "Verify that the database and table exist",
+            "Ensure you have sufficient permissions",
+            "Check for resource constraints (memory, CPU, warehouse size)",
+            "Try running the query directly in a SQL editor for debugging",
+        ]
+        super().__init__(
+            message=f"Query execution failed: {message}",
+            tool_name=tool_name,
+            context=context,
+            recovery_suggestions=recovery_suggestions,
+            severity=ErrorSeverity.HIGH,  # 🔥 execution errors are critical
+            **kwargs,
+        )
+
+
+
 # ---------------- Test & Demonstration ----------------
 if __name__ == "__main__":
     print("Testing Data Discovery Exception System")
@@ -550,6 +584,12 @@ if __name__ == "__main__":
         QueryGenerationError(
             "Could not translate natural language into SQL",
             input_prompt="Show me all customers in 2024"
+        ),
+        QueryExecutionError(
+            "Permission denied while running query",
+            sql_query="SELECT * FROM sensitive_table",
+            database="customer_db",
+            table="sensitive_table"
         ),
     ]
 
