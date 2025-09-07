@@ -1,0 +1,42 @@
+{
+  "environment": "development",
+  "snowflake": {
+    "account": "SVUQRIL-AO69117",
+    "user": "RISHIKANAUJIA",
+    "warehouse": "COMPUTE_WH",
+    "database": "SNOWFLAKE_SAMPLE_DATA",
+    "schema": "TPCDS_SF10TCL",
+    "role": "ACCOUNTADMIN",
+    "max_tables_per_batch": 50,
+    "query_timeout_seconds": 30,
+    "max_sample_rows": 1000
+  },
+  "analysis": {
+    "min_confidence_threshold": 0.7,
+    "max_questions_per_category": 25,
+    "enable_cross_table_joins": true
+  },
+  "security": {
+    "pii_detection_enabled": true,
+    "mask_sensitive_preview": true,
+    "governance_strict_mode": false
+  },
+  "ui": {
+    "enable_sql_execution": false,
+    "max_results_display": 100,
+    "cache_results_minutes": 15,
+    "gradio_port": 7860,
+    "gradio_host": "0.0.0.0"
+  },
+  "monitoring": {
+    "enable_metrics": true,
+    "metrics_port": 8080,
+    "log_level": "INFO"
+  },
+  "cache": {
+    "enable_caching": true,
+    "cache_directory": "cache",
+    "schema_cache_ttl_hours": 24,
+    "query_cache_ttl_hours": 6
+  }
+}
