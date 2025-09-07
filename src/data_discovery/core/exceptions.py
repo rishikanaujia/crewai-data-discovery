@@ -491,6 +491,36 @@ class ErrorHandler:
         self.error_counts.clear()
 
 
+
+class QueryGenerationError(ToolError):
+    """Errors during automated SQL or query generation."""
+
+    def __init__(
+        self,
+        message: str,
+        input_prompt: Optional[str] = None,
+        tool_name: str = "QueryGenerator",
+        **kwargs
+    ):
+        context = kwargs.pop("context", ErrorContext())
+        context.additional_info["input_prompt"] = input_prompt
+        recovery_suggestions = [
+            "Verify the input prompt or template is well-formed",
+            "Check if the database schema matches the expected structure",
+            "Ensure reserved keywords are not used incorrectly",
+            "Try simplifying the natural language request",
+            "Validate query parts before full generation",
+        ]
+        super().__init__(
+            message=f"Query generation failed: {message}",
+            tool_name=tool_name,
+            context=context,
+            recovery_suggestions=recovery_suggestions,
+            severity=ErrorSeverity.HIGH,  # 🔥 Explicit severity level
+            **kwargs,
+        )
+
+
 # ---------------- Test & Demonstration ----------------
 if __name__ == "__main__":
     print("Testing Data Discovery Exception System")
@@ -517,6 +547,10 @@ if __name__ == "__main__":
         AgentTimeoutError("technical_analyst", "schema_discovery", 30),
         SQLValidationError("Syntax error near 'SELCT'", sql_query="SELCT * FROM users"),
         CacheError("Disk full", cache_key="schema_metadata"),
+        QueryGenerationError(
+            "Could not translate natural language into SQL",
+            input_prompt="Show me all customers in 2024"
+        ),
     ]
 
     error_handler = ErrorHandler()
@@ -527,6 +561,8 @@ if __name__ == "__main__":
         print(f"   Category: {handled_error.category.value}")
         print(f"   Severity: {handled_error.severity.value}")
         print(f"   Recovery suggestions: {len(handled_error.recovery_suggestions)}")
+        if "input_prompt" in handled_error.context.additional_info:
+            print(f"   Input Prompt: {handled_error.context.additional_info['input_prompt']}")
         print()
 
     print("📊 Error Summary:")
