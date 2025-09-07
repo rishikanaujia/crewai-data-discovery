@@ -6,10 +6,10 @@ Custom exception classes for the Data Discovery system.
 This module provides structured error handling with categorized exceptions,
 detailed error context, and recovery suggestions for different failure scenarios.
 """
-
-from typing import Any, Dict, List, Optional, Union
+import functools
+from typing import Any, Dict, List, Optional, Union, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, time
 from enum import Enum
 import traceback
 
@@ -73,13 +73,13 @@ class DataDiscoveryException(Exception):
     """
 
     def __init__(
-        self,
-        message: str,
-        category: ErrorCategory = ErrorCategory.UNKNOWN,
-        severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-        context: Optional[ErrorContext] = None,
-        recovery_suggestions: Optional[List[str]] = None,
-        original_exception: Optional[Exception] = None,
+            self,
+            message: str,
+            category: ErrorCategory = ErrorCategory.UNKNOWN,
+            severity: ErrorSeverity = ErrorSeverity.MEDIUM,
+            context: Optional[ErrorContext] = None,
+            recovery_suggestions: Optional[List[str]] = None,
+            original_exception: Optional[Exception] = None,
     ):
         super().__init__(message)
         self.message = message
@@ -455,7 +455,8 @@ class ErrorHandler:
         self.logger = logger
         self.error_counts: Dict[str, int] = {}
 
-    def handle_error(self, error: Union[DataDiscoveryException, Exception], context: Optional[ErrorContext] = None) -> DataDiscoveryException:
+    def handle_error(self, error: Union[DataDiscoveryException, Exception],
+                     context: Optional[ErrorContext] = None) -> DataDiscoveryException:
         """Handle an error with proper logging and context."""
         if not isinstance(error, DataDiscoveryException):
             error = DataDiscoveryException(
@@ -489,6 +490,135 @@ class ErrorHandler:
     def reset_error_counts(self):
         """Reset error counters."""
         self.error_counts.clear()
+
+
+def retry_on_error(
+        max_retries: int = 3,
+        delay_seconds: float = 1.0,
+        backoff_factor: float = 2.0,
+        retry_on: tuple = (ConnectionError, DatabaseTimeoutError, ResourceError)
+):
+    """Decorator for automatic retry logic with exponential backoff."""
+
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            last_exception = None
+            delay = delay_seconds
+
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except retry_on as e:
+                    last_exception = e
+                    if attempt < max_retries:
+                        time.sleep(delay)
+                        delay *= backoff_factor
+                        continue
+                    break
+                except Exception as e:
+                    # Don't retry on non-retryable exceptions
+                    raise e
+
+            # All retries exhausted
+            if isinstance(last_exception, DataDiscoveryException):
+                last_exception.recovery_suggestions.append(
+                    f"Operation failed after {max_retries} retries"
+                )
+            raise last_exception
+
+        return wrapper
+
+    return decorator
+
+
+# Additional specific exceptions for advanced scenarios
+class CircuitBreakerError(DataDiscoveryException):
+    """Circuit breaker opened due to too many failures."""
+
+    def __init__(self, service: str, failure_count: int, **kwargs):
+        message = f"Circuit breaker opened for '{service}' after {failure_count} failures"
+        recovery_suggestions = [
+            "Wait for the circuit breaker to reset",
+            "Check if the underlying service is healthy",
+            "Reduce load on the failing service",
+            "Consider using fallback mechanisms"
+        ]
+        super().__init__(
+            message=message,
+            category=ErrorCategory.RESOURCE,
+            severity=ErrorSeverity.HIGH,
+            recovery_suggestions=recovery_suggestions,
+            **kwargs
+        )
+
+
+class RateLimitError(DataDiscoveryException):
+    """Rate limit exceeded for API or database calls."""
+
+    def __init__(self, resource: str, reset_time: int = None, **kwargs):
+        message = f"Rate limit exceeded for '{resource}'"
+        if reset_time:
+            message += f". Resets in {reset_time} seconds"
+
+        recovery_suggestions = [
+            "Wait for the rate limit to reset",
+            "Reduce the frequency of requests",
+            "Implement request queuing",
+            "Consider upgrading your service tier"
+        ]
+        super().__init__(
+            message=message,
+            category=ErrorCategory.RESOURCE,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_suggestions=recovery_suggestions,
+            **kwargs
+        )
+
+
+# Enhanced error handler with metrics and alerting
+class EnhancedErrorHandler(ErrorHandler):
+    """Enhanced error handler with metrics, alerting, and circuit breaker logic."""
+
+    def __init__(self, logger=None, alert_threshold: int = 10):
+        super().__init__(logger)
+        self.alert_threshold = alert_threshold
+        self.recent_errors = []  # For sliding window analysis
+
+    def should_alert(self, error: DataDiscoveryException) -> bool:
+        """Determine if an alert should be sent."""
+        # Alert on critical errors immediately
+        if error.severity == ErrorSeverity.CRITICAL:
+            return True
+
+        # Alert if we've had too many errors recently
+        current_time = time.time()
+        self.recent_errors = [
+            err_time for err_time in self.recent_errors
+            if current_time - err_time < 300  # 5 minute window
+        ]
+
+        return len(self.recent_errors) >= self.alert_threshold
+
+    def handle_error(self, error: Union[DataDiscoveryException, Exception],
+                     context: Optional[ErrorContext] = None) -> DataDiscoveryException:
+        """Enhanced error handling with alerting."""
+        handled_error = super().handle_error(error, context)
+
+        # Track error timing
+        self.recent_errors.append(time.time())
+
+        # Check if we should send an alert
+        if self.should_alert(handled_error):
+            self._send_alert(handled_error)
+
+        return handled_error
+
+    def _send_alert(self, error: DataDiscoveryException):
+        """Send alert for critical errors (to be implemented)."""
+        if self.logger:
+            self.logger.critical(f"ALERT: {error.message} [ID: {error.error_id}]")
+        # TODO: Implement actual alerting (Slack, email, PagerDuty, etc.)
 
 
 # ---------------- Test & Demonstration ----------------

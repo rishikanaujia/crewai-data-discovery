@@ -1,86 +1,166 @@
-# src/data_discovery/core/config.py
+# src/data_discovery/core/config.py - Enhanced Version
 
 import os
-from typing import Dict, Any, Optional
+import sys
+from typing import Dict, Any, Optional, Union
 from dataclasses import dataclass, field
 from enum import Enum
 import json
 from pathlib import Path
+import logging
 
-# Load environment variables FIRST - before any other code
-print("🔧 Loading environment variables...")
-try:
-    from dotenv import load_dotenv
 
-    # Find and load .env file
-    env_paths = [
-        Path.cwd() / '.env',  # Current directory
-        Path(__file__).parent.parent.parent.parent / '.env'  # Project root
+# Enhanced environment loading with better error handling
+def _load_environment_variables() -> bool:
+    """Load environment variables with robust path detection."""
+    logger = logging.getLogger(__name__)
+
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        logger.warning("python-dotenv not installed. Using system environment only.")
+        return False
+
+    # Multiple .env file locations to check
+    possible_env_paths = [
+        Path.cwd() / '.env',
+        Path(__file__).parent.parent.parent.parent / '.env',
+        Path.home() / '.env.data_discovery',  # User-specific config
+        Path('/etc/data_discovery/.env'),  # System-wide config
     ]
 
-    env_loaded = False
-    for env_path in env_paths:
-        if env_path.exists():
-            print(f"🔍 Found .env at: {env_path}")
-            result = load_dotenv(env_path, override=True)
-            print(f"🔍 Load result: {result}")
-            if result:
-                env_loaded = True
-                print(f"✅ Successfully loaded .env from: {env_path}")
-                # Test immediate loading
-                test_account = os.getenv("SNOWFLAKE_ACCOUNT")
-                print(f"✅ Test variable loaded: {test_account or 'NOT FOUND'}")
-                break
+    for env_path in possible_env_paths:
+        if env_path.exists() and env_path.is_file():
+            try:
+                success = load_dotenv(env_path, override=True)
+                if success:
+                    logger.info(f"Loaded environment from: {env_path}")
+                    return True
+            except Exception as e:
+                logger.warning(f"Failed to load {env_path}: {e}")
+                continue
 
-    if not env_loaded:
-        print("⚠️  No .env file found or loaded successfully")
+    logger.info("No .env file found, using system environment variables")
+    return False
 
-except ImportError:
-    print("⚠️  python-dotenv not found. Install with: pip install python-dotenv")
-except Exception as e:
-    print(f"⚠️  Error loading .env file: {e}")
+
+# Load environment on module import
+_ENV_LOADED = _load_environment_variables()
 
 
 class Environment(Enum):
     """Environment types for configuration management."""
     DEVELOPMENT = "development"
     TESTING = "testing"
+    STAGING = "staging"
     PRODUCTION = "production"
+
+    @classmethod
+    def from_string(cls, env_str: str) -> 'Environment':
+        """Create Environment from string with fallback."""
+        try:
+            return cls(env_str.lower())
+        except ValueError:
+            logging.warning(f"Unknown environment '{env_str}', defaulting to development")
+            return cls.DEVELOPMENT
 
 
 @dataclass
 class SnowflakeConfig:
-    """Snowflake database configuration."""
+    """Snowflake database configuration with enhanced validation."""
     account: str = ""
     user: str = ""
     password: Optional[str] = None
     private_key_path: Optional[str] = None
+    private_key_passphrase: Optional[str] = None
     warehouse: str = "COMPUTE_WH"
     database: str = "ANALYTICS_DB"
     schema: str = "PUBLIC"
     role: str = "DATA_DISCOVERY_ROLE"
+
+    # Connection pool settings
     max_tables_per_batch: int = 50
     query_timeout_seconds: int = 30
     max_sample_rows: int = 1000
+    connection_timeout_seconds: int = 60
+    max_retry_attempts: int = 3
+
+    # Performance tuning
+    client_session_keep_alive: bool = True
+    autocommit: bool = True
+
+    def __post_init__(self):
+        """Validate Snowflake configuration."""
+        if self.account and not self.account.endswith('.snowflakecomputing.com'):
+            if '.' not in self.account:
+                self.account = f"{self.account}.snowflakecomputing.com"
 
     def has_credentials(self) -> bool:
-        """Check if we have credentials to connect."""
-        return bool(self.account and self.user and (self.password or self.private_key_path))
+        """Check if we have sufficient credentials to connect."""
+        return bool(
+            self.account and
+            self.user and
+            (self.password or self._has_valid_private_key())
+        )
+
+    def _has_valid_private_key(self) -> bool:
+        """Check if private key configuration is valid."""
+        if not self.private_key_path:
+            return False
+
+        key_path = Path(self.private_key_path)
+        return key_path.exists() and key_path.is_file()
+
+    def get_connection_params(self) -> Dict[str, Any]:
+        """Get connection parameters for Snowflake connector."""
+        params = {
+            'account': self.account,
+            'user': self.user,
+            'warehouse': self.warehouse,
+            'database': self.database,
+            'schema': self.schema,
+            'role': self.role,
+            'client_session_keep_alive': self.client_session_keep_alive,
+            'autocommit': self.autocommit,
+            'login_timeout': self.connection_timeout_seconds,
+            'network_timeout': self.query_timeout_seconds
+        }
+
+        if self.password:
+            params['password'] = self.password
+        elif self._has_valid_private_key():
+            params['private_key_path'] = self.private_key_path
+            if self.private_key_passphrase:
+                params['private_key_passphrase'] = self.private_key_passphrase
+
+        return params
 
 
 @dataclass
 class AnalysisConfig:
-    """Analysis and query generation configuration."""
+    """Analysis and query generation configuration with validation."""
     min_confidence_threshold: float = 0.7
     max_questions_per_category: int = 25
     enable_cross_table_joins: bool = True
     max_join_tables: int = 3
     sample_data_rows: int = 100
 
+    # Advanced analysis settings
+    enable_statistical_profiling: bool = True
+    enable_pattern_detection: bool = True
+    max_column_cardinality: int = 1000
+    null_threshold_percent: float = 95.0
+
     def __post_init__(self):
         """Validate analysis configuration."""
         if not 0.0 <= self.min_confidence_threshold <= 1.0:
             raise ValueError("Confidence threshold must be between 0.0 and 1.0")
+
+        if self.max_questions_per_category < 1:
+            raise ValueError("Max questions per category must be positive")
+
+        if not 0.0 <= self.null_threshold_percent <= 100.0:
+            raise ValueError("Null threshold must be between 0.0 and 100.0")
 
 
 @dataclass
@@ -92,27 +172,57 @@ class SecurityConfig:
     max_pii_scan_rows: int = 10000
     sensitive_patterns_file: Optional[str] = None
 
+    # Additional security settings
+    enable_query_sanitization: bool = True
+    max_query_complexity: int = 10  # Limit complex queries
+    allowed_functions: Optional[list] = None  # Whitelist SQL functions
+    forbidden_keywords: list = field(default_factory=lambda: ['DELETE', 'DROP', 'TRUNCATE', 'ALTER'])
+
     def get_pii_patterns_path(self) -> Path:
-        """Get path to PII patterns file."""
+        """Get path to PII patterns file with fallback."""
         if self.sensitive_patterns_file:
-            return Path(self.sensitive_patterns_file)
-        return Path(__file__).parent.parent.parent.parent / "data" / "reference" / "pii_patterns.json"
+            custom_path = Path(self.sensitive_patterns_file)
+            if custom_path.exists():
+                return custom_path
+
+        # Default path
+        default_path = Path(__file__).parent.parent.parent.parent / "data" / "reference" / "pii_patterns.json"
+        return default_path
+
+    def is_query_allowed(self, query: str) -> tuple[bool, str]:
+        """Check if a query is allowed based on security rules."""
+        query_upper = query.upper()
+
+        for keyword in self.forbidden_keywords:
+            if keyword in query_upper:
+                return False, f"Forbidden keyword detected: {keyword}"
+
+        return True, "Query allowed"
 
 
 @dataclass
 class UIConfig:
-    """User interface configuration."""
-    enable_sql_execution: bool = False  # Security: preview only
+    """User interface configuration with validation."""
+    enable_sql_execution: bool = False  # Security: preview only by default
     max_results_display: int = 100
     cache_results_minutes: int = 15
     gradio_port: int = 7860
     gradio_host: str = "0.0.0.0"
     share_publicly: bool = False
 
+    # UI enhancement settings
+    enable_dark_mode: bool = True
+    max_export_rows: int = 10000
+    enable_real_time_updates: bool = False
+    session_timeout_minutes: int = 480  # 8 hours
+
     def __post_init__(self):
         """Validate UI configuration."""
-        if self.gradio_port < 1024 or self.gradio_port > 65535:
+        if not 1024 <= self.gradio_port <= 65535:
             raise ValueError("Gradio port must be between 1024 and 65535")
+
+        if self.max_results_display < 1:
+            raise ValueError("Max results display must be positive")
 
 
 @dataclass
@@ -125,25 +235,67 @@ class MonitoringConfig:
     enable_performance_tracking: bool = True
     health_check_interval_seconds: int = 30
 
+    # Enhanced monitoring
+    enable_structured_logging: bool = True
+    log_rotation_size_mb: int = 100
+    max_log_files: int = 5
+    enable_error_alerting: bool = False
+
+    def __post_init__(self):
+        """Validate monitoring configuration."""
+        valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+        if self.log_level.upper() not in valid_levels:
+            raise ValueError(f"Log level must be one of {valid_levels}")
+
     def get_log_file_path(self) -> Optional[Path]:
         """Get resolved log file path."""
         if self.log_file_path:
             return Path(self.log_file_path)
         return None
 
+    def setup_logging(self) -> None:
+        """Configure Python logging based on settings."""
+        log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+        if self.enable_structured_logging:
+            log_format = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+
+        logging.basicConfig(
+            level=getattr(logging, self.log_level.upper()),
+            format=log_format,
+            handlers=[
+                logging.StreamHandler(sys.stdout),
+                *([logging.FileHandler(self.get_log_file_path())] if self.log_file_path else [])
+            ]
+        )
+
 
 @dataclass
 class CacheConfig:
-    """Caching configuration."""
+    """Caching configuration with enhanced options."""
     enable_caching: bool = True
     cache_directory: str = "cache"
     schema_cache_ttl_hours: int = 24
     query_cache_ttl_hours: int = 6
+    profile_cache_ttl_hours: int = 12
     max_cache_size_mb: int = 1024
+
+    # Cache cleanup settings
+    enable_auto_cleanup: bool = True
+    cleanup_interval_hours: int = 6
+    cache_compression: bool = True
 
     def get_cache_directory(self) -> Path:
         """Get resolved cache directory path."""
-        return Path(self.cache_directory).resolve()
+        cache_path = Path(self.cache_directory).resolve()
+        cache_path.mkdir(parents=True, exist_ok=True)
+        return cache_path
+
+    def get_cache_subdirectory(self, subdir: str) -> Path:
+        """Get a specific cache subdirectory."""
+        sub_path = self.get_cache_directory() / subdir
+        sub_path.mkdir(parents=True, exist_ok=True)
+        return sub_path
 
 
 @dataclass
@@ -158,68 +310,91 @@ class DataDiscoveryConfig:
     cache: CacheConfig = field(default_factory=CacheConfig)
 
     @classmethod
-    def from_env(cls, environment: Environment = None) -> "DataDiscoveryConfig":
+    def from_env(cls, environment: Union[Environment, str, None] = None) -> "DataDiscoveryConfig":
         """Create configuration from environment variables."""
         if environment is None:
-            env_name = os.getenv("ENVIRONMENT", "development").lower()
-            environment = Environment(env_name)
+            env_name = os.getenv("ENVIRONMENT", "development")
+            environment = Environment.from_string(env_name)
+        elif isinstance(environment, str):
+            environment = Environment.from_string(environment)
 
-        # Snowflake configuration from environment
+        # Helper function for environment variable parsing
+        def get_bool(key: str, default: bool = False) -> bool:
+            return os.getenv(key, str(default)).lower() in ('true', '1', 'yes', 'on')
+
+        def get_int(key: str, default: int) -> int:
+            try:
+                return int(os.getenv(key, str(default)))
+            except ValueError:
+                return default
+
+        def get_float(key: str, default: float) -> float:
+            try:
+                return float(os.getenv(key, str(default)))
+            except ValueError:
+                return default
+
+        # Create configurations
         snowflake_config = SnowflakeConfig(
             account=os.getenv("SNOWFLAKE_ACCOUNT", ""),
             user=os.getenv("SNOWFLAKE_USER", ""),
             password=os.getenv("SNOWFLAKE_PASSWORD"),
             private_key_path=os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH"),
+            private_key_passphrase=os.getenv("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"),
             warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
             database=os.getenv("SNOWFLAKE_DATABASE", "ANALYTICS_DB"),
             schema=os.getenv("SNOWFLAKE_SCHEMA", "PUBLIC"),
             role=os.getenv("SNOWFLAKE_ROLE", "DATA_DISCOVERY_ROLE"),
-            max_tables_per_batch=int(os.getenv("SNOWFLAKE_MAX_TABLES_BATCH", "50")),
-            query_timeout_seconds=int(os.getenv("SNOWFLAKE_QUERY_TIMEOUT", "30")),
-            max_sample_rows=int(os.getenv("SNOWFLAKE_MAX_SAMPLE_ROWS", "1000"))
+            max_tables_per_batch=get_int("SNOWFLAKE_MAX_TABLES_BATCH", 50),
+            query_timeout_seconds=get_int("SNOWFLAKE_QUERY_TIMEOUT", 30),
+            max_sample_rows=get_int("SNOWFLAKE_MAX_SAMPLE_ROWS", 1000),
+            connection_timeout_seconds=get_int("SNOWFLAKE_CONNECTION_TIMEOUT", 60),
+            client_session_keep_alive=get_bool("SNOWFLAKE_KEEP_ALIVE", True)
         )
 
-        # Analysis configuration
         analysis_config = AnalysisConfig(
-            min_confidence_threshold=float(os.getenv("ANALYSIS_MIN_CONFIDENCE", "0.7")),
-            max_questions_per_category=int(os.getenv("ANALYSIS_MAX_QUESTIONS", "25")),
-            enable_cross_table_joins=os.getenv("ANALYSIS_ENABLE_JOINS", "true").lower() == "true"
+            min_confidence_threshold=get_float("ANALYSIS_MIN_CONFIDENCE", 0.7),
+            max_questions_per_category=get_int("ANALYSIS_MAX_QUESTIONS", 25),
+            enable_cross_table_joins=get_bool("ANALYSIS_ENABLE_JOINS", True),
+            max_join_tables=get_int("ANALYSIS_MAX_JOIN_TABLES", 3),
+            sample_data_rows=get_int("ANALYSIS_SAMPLE_ROWS", 100)
         )
 
-        # Security configuration
         security_config = SecurityConfig(
-            pii_detection_enabled=os.getenv("SECURITY_PII_DETECTION", "true").lower() == "true",
-            mask_sensitive_preview=os.getenv("SECURITY_MASK_PREVIEW", "true").lower() == "true",
-            governance_strict_mode=os.getenv("SECURITY_STRICT_MODE", "false").lower() == "true"
+            pii_detection_enabled=get_bool("SECURITY_PII_DETECTION", True),
+            mask_sensitive_preview=get_bool("SECURITY_MASK_PREVIEW", True),
+            governance_strict_mode=get_bool("SECURITY_STRICT_MODE", False),
+            max_pii_scan_rows=get_int("SECURITY_PII_SCAN_ROWS", 10000),
+            sensitive_patterns_file=os.getenv("SECURITY_PII_PATTERNS_FILE")
         )
 
-        # UI configuration
         ui_config = UIConfig(
-            enable_sql_execution=os.getenv("UI_ENABLE_SQL_EXEC", "false").lower() == "true",
-            max_results_display=int(os.getenv("UI_MAX_RESULTS", "100")),
-            cache_results_minutes=int(os.getenv("UI_CACHE_MINUTES", "15")),
-            gradio_port=int(os.getenv("GRADIO_PORT", "7860")),
+            enable_sql_execution=get_bool("UI_ENABLE_SQL_EXEC", False),
+            max_results_display=get_int("UI_MAX_RESULTS", 100),
+            cache_results_minutes=get_int("UI_CACHE_MINUTES", 15),
+            gradio_port=get_int("GRADIO_PORT", 7860),
             gradio_host=os.getenv("GRADIO_HOST", "0.0.0.0"),
-            share_publicly=os.getenv("GRADIO_SHARE", "false").lower() == "true"
+            share_publicly=get_bool("GRADIO_SHARE", False)
         )
 
-        # Monitoring configuration
         monitoring_config = MonitoringConfig(
-            enable_metrics=os.getenv("MONITORING_ENABLE", "true").lower() == "true",
-            metrics_port=int(os.getenv("MONITORING_PORT", "8080")),
+            enable_metrics=get_bool("MONITORING_ENABLE", True),
+            metrics_port=get_int("MONITORING_PORT", 8080),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
-            log_file_path=os.getenv("LOG_FILE_PATH")
+            log_file_path=os.getenv("LOG_FILE_PATH"),
+            enable_performance_tracking=get_bool("MONITORING_PERFORMANCE", True),
+            health_check_interval_seconds=get_int("MONITORING_HEALTH_INTERVAL", 30)
         )
 
-        # Cache configuration
         cache_config = CacheConfig(
-            enable_caching=os.getenv("CACHE_ENABLE", "true").lower() == "true",
+            enable_caching=get_bool("CACHE_ENABLE", True),
             cache_directory=os.getenv("CACHE_DIRECTORY", "cache"),
-            schema_cache_ttl_hours=int(os.getenv("CACHE_SCHEMA_TTL_HOURS", "24")),
-            query_cache_ttl_hours=int(os.getenv("CACHE_QUERY_TTL_HOURS", "6"))
+            schema_cache_ttl_hours=get_int("CACHE_SCHEMA_TTL_HOURS", 24),
+            query_cache_ttl_hours=get_int("CACHE_QUERY_TTL_HOURS", 6),
+            max_cache_size_mb=get_int("CACHE_MAX_SIZE_MB", 1024)
         )
 
-        return cls(
+        config = cls(
             environment=environment,
             snowflake=snowflake_config,
             analysis=analysis_config,
@@ -229,236 +404,136 @@ class DataDiscoveryConfig:
             cache=cache_config
         )
 
+        # Setup logging immediately
+        config.monitoring.setup_logging()
+
+        return config
+
+    def validate(self) -> tuple[bool, list[str]]:
+        """Validate the entire configuration and return issues."""
+        issues = []
+
+        # Environment-specific validation
+        if self.environment == Environment.PRODUCTION:
+            if not self.snowflake.has_credentials():
+                issues.append("Snowflake credentials are required for production")
+
+            if self.ui.enable_sql_execution:
+                issues.append("SQL execution should be disabled in production")
+
+            if self.ui.share_publicly:
+                issues.append("Public sharing should be disabled in production")
+
+        # Cache directory validation
+        try:
+            self.cache.get_cache_directory()
+        except Exception as e:
+            issues.append(f"Cache directory validation failed: {e}")
+
+        # PII patterns validation
+        if self.security.pii_detection_enabled:
+            pii_path = self.security.get_pii_patterns_path()
+            if not pii_path.exists():
+                issues.append(f"PII patterns file not found: {pii_path}")
+
+        # Port conflicts
+        if self.ui.gradio_port == self.monitoring.metrics_port:
+            issues.append("Gradio port conflicts with metrics port")
+
+        return len(issues) == 0, issues
+
     def can_connect_to_snowflake(self) -> bool:
         """Check if we have enough information to connect to Snowflake."""
         return self.snowflake.has_credentials()
 
-    def validate(self) -> bool:
-        """Validate the entire configuration based on environment."""
-        try:
-            # Only validate Snowflake connection for production
-            if self.environment == Environment.PRODUCTION:
-                if not self.snowflake.has_credentials():
-                    raise ValueError("Snowflake credentials are required for production")
-            else:
-                # For development/testing, just warn about missing credentials
-                if not self.snowflake.has_credentials():
-                    missing_creds = []
-                    if not self.snowflake.account:
-                        missing_creds.append("account")
-                    if not self.snowflake.user:
-                        missing_creds.append("user")
-                    if not self.snowflake.password and not self.snowflake.private_key_path:
-                        missing_creds.append("password/private_key")
-
-                    if missing_creds:
-                        print(f"⚠️  Development mode: Missing Snowflake credentials: {', '.join(missing_creds)}")
-                        print("   Set these in .env file when ready to connect to Snowflake")
-
-            # Validate cache directory is writable
-            cache_dir = self.cache.get_cache_directory()
-            cache_dir.mkdir(parents=True, exist_ok=True)
-
-            # Validate PII patterns file exists if specified
-            if self.security.sensitive_patterns_file:
-                pii_path = self.security.get_pii_patterns_path()
-                if not pii_path.exists():
-                    print(f"⚠️  PII patterns file not found: {pii_path} (will use defaults)")
-
-            return True
-
-        except Exception as e:
-            print(f"Configuration validation failed: {e}")
-            return False
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary for serialization."""
-        return {
-            "environment": self.environment.value,
-            "snowflake": {
-                "account": self.snowflake.account,
-                "user": self.snowflake.user,
-                "warehouse": self.snowflake.warehouse,
-                "database": self.snowflake.database,
-                "schema": self.snowflake.schema,
-                "role": self.snowflake.role,
-                "max_tables_per_batch": self.snowflake.max_tables_per_batch,
-                "query_timeout_seconds": self.snowflake.query_timeout_seconds,
-                "max_sample_rows": self.snowflake.max_sample_rows
-            },
-            "analysis": {
-                "min_confidence_threshold": self.analysis.min_confidence_threshold,
-                "max_questions_per_category": self.analysis.max_questions_per_category,
-                "enable_cross_table_joins": self.analysis.enable_cross_table_joins
-            },
-            "security": {
-                "pii_detection_enabled": self.security.pii_detection_enabled,
-                "mask_sensitive_preview": self.security.mask_sensitive_preview,
-                "governance_strict_mode": self.security.governance_strict_mode
-            },
-            "ui": {
-                "enable_sql_execution": self.ui.enable_sql_execution,
-                "max_results_display": self.ui.max_results_display,
-                "cache_results_minutes": self.ui.cache_results_minutes,
-                "gradio_port": self.ui.gradio_port,
-                "gradio_host": self.ui.gradio_host
-            },
-            "monitoring": {
-                "enable_metrics": self.monitoring.enable_metrics,
-                "metrics_port": self.monitoring.metrics_port,
-                "log_level": self.monitoring.log_level
-            },
-            "cache": {
-                "enable_caching": self.cache.enable_caching,
-                "cache_directory": self.cache.cache_directory,
-                "schema_cache_ttl_hours": self.cache.schema_cache_ttl_hours,
-                "query_cache_ttl_hours": self.cache.query_cache_ttl_hours
-            }
-        }
-
-    def save_to_file(self, config_path: str) -> None:
-        """Save configuration to JSON file."""
-        config_file = Path(config_path)
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(config_file, 'w') as f:
-            json.dump(self.to_dict(), f, indent=2)
+    def summary(self) -> str:
+        """Get a human-readable configuration summary."""
+        lines = [
+            f"Data Discovery Configuration Summary",
+            f"{'=' * 40}",
+            f"Environment: {self.environment.value}",
+            f"Snowflake Account: {self.snowflake.account or 'NOT SET'}",
+            f"Snowflake Ready: {'✓' if self.can_connect_to_snowflake() else '✗'}",
+            f"Cache Directory: {self.cache.get_cache_directory()}",
+            f"UI Port: {self.ui.gradio_port}",
+            f"Log Level: {self.monitoring.log_level}",
+            f"PII Detection: {'✓' if self.security.pii_detection_enabled else '✗'}",
+            f"SQL Execution: {'✓' if self.ui.enable_sql_execution else '✗'}",
+        ]
+        return '\n'.join(lines)
 
 
-# Global configuration instance
-_config: Optional[DataDiscoveryConfig] = None
+# Enhanced global configuration management
+class ConfigManager:
+    """Thread-safe configuration manager."""
+
+    _instance: Optional[DataDiscoveryConfig] = None
+    _lock = None
+
+    @classmethod
+    def get_config(cls, reload: bool = False) -> DataDiscoveryConfig:
+        """Get configuration instance with thread safety."""
+        if cls._lock is None:
+            import threading
+            cls._lock = threading.Lock()
+
+        with cls._lock:
+            if cls._instance is None or reload:
+                cls._instance = DataDiscoveryConfig.from_env()
+
+                # Validate configuration
+                is_valid, issues = cls._instance.validate()
+                if not is_valid:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Configuration validation issues: {issues}")
+
+        return cls._instance
+
+    @classmethod
+    def set_config(cls, config: DataDiscoveryConfig) -> None:
+        """Set configuration instance."""
+        if cls._lock is None:
+            import threading
+            cls._lock = threading.Lock()
+
+        with cls._lock:
+            cls._instance = config
 
 
-def get_config() -> DataDiscoveryConfig:
+# Public API
+def get_config(reload: bool = False) -> DataDiscoveryConfig:
     """Get the global configuration instance."""
-    global _config
-    if _config is None:
-        _config = DataDiscoveryConfig.from_env()
-    return _config
+    return ConfigManager.get_config(reload=reload)
 
 
 def set_config(config: DataDiscoveryConfig) -> None:
     """Set the global configuration instance."""
-    global _config
-    _config = config
-
-
-def reload_config() -> DataDiscoveryConfig:
-    """Reload configuration from environment."""
-    global _config
-    _config = DataDiscoveryConfig.from_env()
-    return _config
+    ConfigManager.set_config(config)
 
 
 if __name__ == "__main__":
-    # Example usage and testing
-    print("\nTesting Data Discovery Configuration System")
+    # Enhanced testing and validation
+    print("Data Discovery Configuration System Test")
     print("=" * 50)
 
-    # Debug: Show what environment variables are loaded
-    print("🔍 Debug: Environment Variables Check")
-    env_vars = [
-        "ENVIRONMENT", "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER",
-        "SNOWFLAKE_PASSWORD", "SNOWFLAKE_DATABASE"
-    ]
-    for var in env_vars:
-        value = os.getenv(var, "NOT SET")
-        # Mask password for security
-        if "PASSWORD" in var and value != "NOT SET":
-            value = "*" * len(value)
-        print(f"   {var}: {value}")
-
-    # Check if any environment variables are set
-    env_vars_set = [var for var in env_vars if os.getenv(var)]
-    print(f"   📊 Variables set: {len(env_vars_set)}/{len(env_vars)}")
-    print()
-
     try:
-        # Test creating config from environment
-        config = DataDiscoveryConfig.from_env()
-        print("✅ Configuration created from environment")
+        config = get_config()
+        print(config.summary())
 
-        # Test validation
-        is_valid = config.validate()
-        print(f"✅ Configuration validation: {'PASSED' if is_valid else 'FAILED'}")
+        is_valid, issues = config.validate()
+        print(f"\nValidation: {'PASSED' if is_valid else 'FAILED'}")
 
-        # Check Snowflake connectivity readiness
-        can_connect = config.can_connect_to_snowflake()
-        print(f"🔗 Snowflake connection ready: {'YES' if can_connect else 'NO'}")
+        if issues:
+            print("Issues found:")
+            for issue in issues:
+                print(f"  - {issue}")
 
-        # Print configuration summary
-        print(f"\nConfiguration Summary:")
-        print(f"Environment: {config.environment.value}")
-        print(f"Snowflake Account: {config.snowflake.account or 'NOT SET'}")
-        print(f"Snowflake User: {config.snowflake.user or 'NOT SET'}")
-        print(f"Snowflake Database: {config.snowflake.database}")
-        print(f"Analysis Confidence Threshold: {config.analysis.min_confidence_threshold}")
-        print(f"Security PII Detection: {config.security.pii_detection_enabled}")
-        print(f"UI Port: {config.ui.gradio_port}")
-        print(f"Cache Enabled: {config.cache.enable_caching}")
-        print(f"Cache Directory: {config.cache.get_cache_directory()}")
-
-        # Test serialization
-        config_dict = config.to_dict()
-        print(f"✅ Configuration serialization successful")
-
-        # Create sample config file for reference
-        sample_config_path = "sample_config.json"
-        config.save_to_file(sample_config_path)
-        print(f"✅ Sample configuration saved to {sample_config_path}")
-
-        print(f"\n{'=' * 50}")
-        if can_connect:
-            print("🚀 Configuration system is ready for Snowflake connection!")
+        # Test Snowflake connection readiness
+        if config.can_connect_to_snowflake():
+            print("\n✓ Ready for Snowflake connection!")
         else:
-            print("🔧 Configuration system is ready for development!")
-            print("   Add Snowflake credentials to .env file when ready to connect.")
-            print("\n   Example .env entries:")
-            print("   SNOWFLAKE_ACCOUNT=your-account.snowflakecomputing.com")
-            print("   SNOWFLAKE_USER=your-username")
-            print("   SNOWFLAKE_PASSWORD=your-password")
+            print("\n⚠ Snowflake credentials needed for connection")
 
     except Exception as e:
-        print(f"❌ Configuration test failed: {e}")
-        print("Please check your environment variables or configuration.")
-
-        # Additional debug info on failure
-        print(f"\n🔍 Debug Info:")
-        print(f"   Current working directory: {os.getcwd()}")
-        print(f"   .env file exists: {Path('.env').exists()}")
-        print(f"   .env file path: {Path('.env').absolute()}")
-
-        # Check if dotenv is properly installed
-        try:
-            import dotenv
-
-            print(f"   ✅ python-dotenv installed successfully")
-        except ImportError:
-            print(f"   ❌ python-dotenv not installed!")
-
-        # Try to load .env manually for debugging
-        env_file = Path('.env')
-        if env_file.exists():
-            print(f"   .env file content (first 10 lines):")
-            with open(env_file, 'r') as f:
-                for i, line in enumerate(f):
-                    if i >= 10:
-                        break
-                    print(f"      {line.strip()}")
-
-            # Try manual loading as a test
-            print(f"\n   🔧 Attempting manual .env loading...")
-            try:
-                from dotenv import load_dotenv
-
-                result = load_dotenv(env_file, override=True)
-                print(f"   Manual load result: {result}")
-
-                # Check if variables are now available
-                test_var = os.getenv("SNOWFLAKE_ACCOUNT")
-                print(f"   Test variable after manual load: {test_var or 'STILL NOT SET'}")
-            except Exception as load_error:
-                print(f"   Manual load failed: {load_error}")
-        else:
-            print(f"   ❌ .env file not found!")
-            print(f"   Expected path: {env_file.absolute()}")
+        logging.error(f"Configuration test failed: {e}")
+        sys.exit(1)

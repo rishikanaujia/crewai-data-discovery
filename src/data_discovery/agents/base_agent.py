@@ -1,550 +1,411 @@
-# src/data_discovery/agents/base_agent.py
+# Production enhancements for the Base Agent Framework
 
-"""
-Base Agent Framework for the Data Discovery system.
-
-Provides common functionality, error handling, state management, and integration
-with core systems that all specialized agents will inherit from.
-"""
-
-import time
-import uuid
-from typing import Dict, Any, List, Optional, Union
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from abc import ABC, abstractmethod
-from enum import Enum
-
-# Core system imports
-import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).parent.parent))
-
-from core.config import get_config
-from core.logging_config import get_logger
-from core.state_manager import get_state_manager, StateType
-from core.database_connector import get_connector
-from core.exceptions import DataDiscoveryException
+import asyncio
+from typing import Callable, Awaitable
+from concurrent.futures import ThreadPoolExecutor
+import threading
+from dataclasses import replace
 
 
-class AgentStatus(Enum):
-    """Status of agent execution."""
-    IDLE = "idle"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    PAUSED = "paused"
+class AsyncAgentMixin:
+    """Mixin to add async capabilities to agents."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.thread_pool = ThreadPoolExecutor(max_workers=2)
+        self.async_tasks: Dict[str, asyncio.Task] = {}
 
-class TaskPriority(Enum):
-    """Priority levels for agent tasks."""
-    LOW = 1
-    MEDIUM = 2
-    HIGH = 3
-    CRITICAL = 4
+    async def execute_task_async(self, task: AgentTask) -> Dict[str, Any]:
+        """Execute task asynchronously."""
+        loop = asyncio.get_event_loop()
 
-
-@dataclass
-class AgentTask:
-    """Represents a task for an agent to execute."""
-    task_id: str
-    task_type: str
-    description: str
-    priority: TaskPriority = TaskPriority.MEDIUM
-    parameters: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.now)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    status: AgentStatus = AgentStatus.IDLE
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    progress_percent: float = 0.0
-
-    def get_duration_seconds(self) -> Optional[float]:
-        """Get task execution duration in seconds."""
-        if self.started_at and self.completed_at:
-            return (self.completed_at - self.started_at).total_seconds()
-        elif self.started_at:
-            return (datetime.now() - self.started_at).total_seconds()
-        return None
-
-
-@dataclass
-class AgentMetrics:
-    """Metrics for agent performance tracking."""
-    agent_id: str
-    total_tasks_completed: int = 0
-    total_tasks_failed: int = 0
-    total_execution_time_seconds: float = 0.0
-    average_task_time_seconds: float = 0.0
-    success_rate: float = 0.0
-    last_activity: Optional[datetime] = None
-
-    def update_completion(self, task: AgentTask):
-        """Update metrics when a task completes successfully."""
-        self.total_tasks_completed += 1
-        if task.get_duration_seconds():
-            self.total_execution_time_seconds += task.get_duration_seconds()
-        self.last_activity = datetime.now()
-        self._recalculate_derived_metrics()
-
-    def update_failure(self, task: AgentTask):
-        """Update metrics when a task fails."""
-        self.total_tasks_failed += 1
-        if task.get_duration_seconds():
-            self.total_execution_time_seconds += task.get_duration_seconds()
-        self.last_activity = datetime.now()
-        self._recalculate_derived_metrics()
-
-    def _recalculate_derived_metrics(self):
-        """Recalculate derived metrics."""
-        total_tasks = self.total_tasks_completed + self.total_tasks_failed
-        if total_tasks > 0:
-            self.success_rate = self.total_tasks_completed / total_tasks
-            self.average_task_time_seconds = self.total_execution_time_seconds / total_tasks
-
-
-class BaseAgent(ABC):
-    """
-    Base class for all Data Discovery agents.
-
-    Provides common functionality including logging, error handling,
-    state management, and integration with core systems.
-    """
-
-    def __init__(self, agent_id: str = None, agent_name: str = None):
-        # Agent identification
-        self.agent_id = agent_id or f"{self.__class__.__name__}_{uuid.uuid4().hex[:8]}"
-        self.agent_name = agent_name or self.__class__.__name__
-
-        # Core system integration
-        self.config = get_config()
-        self.logger = get_logger(f"agent_{self.agent_id}")
-        self.state_manager = get_state_manager()
-        self.connector = get_connector()
-
-        # Agent state
-        self.status = AgentStatus.IDLE
-        self.current_task: Optional[AgentTask] = None
-        self.task_queue: List[AgentTask] = []
-        self.metrics = AgentMetrics(agent_id=self.agent_id)
-
-        # Configuration
-        self.max_retries = 3
-        self.timeout_seconds = 300  # 5 minutes default
-
-        self.logger.info("Agent initialized",
-                         agent_id=self.agent_id,
-                         agent_name=self.agent_name,
-                         agent_type=self.__class__.__name__)
-
-    @abstractmethod
-    def get_capabilities(self) -> List[str]:
-        """Return list of capabilities this agent provides."""
-        pass
-
-    @abstractmethod
-    def execute_task(self, task: AgentTask) -> Dict[str, Any]:
-        """Execute a specific task. Must be implemented by subclasses."""
-        pass
-
-    def add_task(self, task_type: str, description: str, parameters: Dict[str, Any] = None,
-                 priority: TaskPriority = TaskPriority.MEDIUM) -> str:
-        """Add a task to the agent's queue."""
-        task = AgentTask(
-            task_id=f"{self.agent_id}_{uuid.uuid4().hex[:8]}",
-            task_type=task_type,
-            description=description,
-            priority=priority,
-            parameters=parameters or {}
+        # Run the synchronous execute_task in thread pool
+        return await loop.run_in_executor(
+            self.thread_pool,
+            self.execute_task,
+            task
         )
 
-        # Insert task based on priority
-        inserted = False
-        for i, existing_task in enumerate(self.task_queue):
-            if task.priority.value > existing_task.priority.value:
-                self.task_queue.insert(i, task)
-                inserted = True
-                break
-
-        if not inserted:
-            self.task_queue.append(task)
-
-        self.logger.info("Task added to queue",
-                         task_id=task.task_id,
-                         task_type=task_type,
-                         priority=priority.name,
-                         queue_size=len(self.task_queue))
-
-        return task.task_id
-
-    def run_next_task(self) -> Optional[Dict[str, Any]]:
-        """Execute the next task in the queue."""
-        if not self.task_queue:
-            self.logger.debug("No tasks in queue")
-            return None
-
-        task = self.task_queue.pop(0)
-        return self.run_task(task)
-
-    def run_task(self, task: AgentTask) -> Dict[str, Any]:
-        """Execute a specific task with error handling and logging."""
+    async def run_task_async(self, task: AgentTask) -> Dict[str, Any]:
+        """Async version of run_task with proper error handling."""
         self.current_task = task
         self.status = AgentStatus.RUNNING
         task.status = AgentStatus.RUNNING
         task.started_at = datetime.now()
 
-        # Save progress checkpoint
-        checkpoint_key = f"task_{task.task_id}"
-
         try:
-            self.logger.log_agent_start(self.agent_id, task.description)
+            # Create async task
+            async_task = asyncio.create_task(self.execute_task_async(task))
+            self.async_tasks[task.task_id] = async_task
 
-            with self.state_manager.checkpoint(checkpoint_key) as checkpoint_id:
-                # Save task progress
-                self.state_manager.save_state(
-                    checkpoint_key,
-                    {
-                        "task_id": task.task_id,
-                        "agent_id": self.agent_id,
-                        "status": "running",
-                        "started_at": task.started_at.isoformat(),
-                        "progress": 0
-                    },
-                    StateType.AGENT_PROGRESS,
-                    ttl_hours=1
-                )
-
-                # Execute the task
-                result = self._execute_task_with_retry(task)
-
-                # Mark as completed
-                task.completed_at = datetime.now()
-                task.status = AgentStatus.COMPLETED
-                task.result = result
-                task.progress_percent = 100.0
-
-                # Update metrics
-                self.metrics.update_completion(task)
-
-                # Log completion
-                duration = task.get_duration_seconds()
-                self.logger.log_agent_complete(self.agent_id, task.description, duration)
-
-                # Save final progress
-                self.state_manager.save_state(
-                    checkpoint_key,
-                    {
-                        "task_id": task.task_id,
-                        "agent_id": self.agent_id,
-                        "status": "completed",
-                        "completed_at": task.completed_at.isoformat(),
-                        "progress": 100,
-                        "result": result
-                    },
-                    StateType.AGENT_PROGRESS,
-                    ttl_hours=24
-                )
-
-                self.status = AgentStatus.IDLE
-                self.current_task = None
-
-                return result
-
-        except Exception as e:
-            # Handle failure
-            task.completed_at = datetime.now()
-            task.status = AgentStatus.FAILED
-            task.error = str(e)
-
-            # Update metrics
-            self.metrics.update_failure(task)
-
-            # Log error
-            duration = task.get_duration_seconds()
-            self.logger.log_agent_error(self.agent_id, task.description, e)
-
-            self.status = AgentStatus.FAILED
-            self.current_task = None
-
-            # Re-raise for handling by caller
-            raise DataDiscoveryException(
-                f"Agent {self.agent_id} failed task {task.task_id}: {str(e)}"
+            # Execute with timeout
+            result = await asyncio.wait_for(
+                async_task,
+                timeout=self.timeout_seconds
             )
 
-    def _execute_task_with_retry(self, task: AgentTask) -> Dict[str, Any]:
-        """Execute task with retry logic."""
-        last_exception = None
+            # Success handling
+            task.completed_at = datetime.now()
+            task.status = AgentStatus.COMPLETED
+            task.result = result
+            self.metrics.update_completion(task)
 
-        for attempt in range(self.max_retries):
-            try:
-                self.logger.debug("Executing task",
-                                  task_id=task.task_id,
-                                  attempt=attempt + 1,
-                                  max_attempts=self.max_retries)
+            return result
 
-                # Update progress
-                task.progress_percent = (attempt / self.max_retries) * 50  # Up to 50% for attempts
+        except asyncio.TimeoutError:
+            task.error = f"Task timed out after {self.timeout_seconds} seconds"
+            task.status = AgentStatus.FAILED
+            self.metrics.update_failure(task)
+            raise
 
-                result = self.execute_task(task)
-                return result
+        except Exception as e:
+            task.error = str(e)
+            task.status = AgentStatus.FAILED
+            self.metrics.update_failure(task)
+            raise
 
-            except Exception as e:
-                last_exception = e
-                self.logger.warning("Task execution attempt failed",
-                                    task_id=task.task_id,
-                                    attempt=attempt + 1,
-                                    error=str(e))
+        finally:
+            if task.task_id in self.async_tasks:
+                del self.async_tasks[task.task_id]
+            self.status = AgentStatus.IDLE
+            self.current_task = None
 
-                if attempt < self.max_retries - 1:
-                    # Wait before retry (exponential backoff)
-                    wait_time = 2 ** attempt
-                    self.logger.info("Retrying task",
-                                     task_id=task.task_id,
-                                     wait_seconds=wait_time)
-                    time.sleep(wait_time)
 
-        # All retries failed
-        raise last_exception
+class ProgressTracker:
+    """Enhanced progress tracking with detailed steps."""
 
-    def get_status(self) -> Dict[str, Any]:
-        """Get current agent status and metrics."""
+    def __init__(self, task: AgentTask, total_steps: int):
+        self.task = task
+        self.total_steps = total_steps
+        self.current_step = 0
+        self.step_descriptions = {}
+        self.step_start_times = {}
+
+    def start_step(self, step_name: str, description: str = ""):
+        """Start a new step in the task."""
+        self.current_step += 1
+        self.step_descriptions[self.current_step] = description or step_name
+        self.step_start_times[self.current_step] = time.time()
+
+        # Update task progress
+        self.task.progress_percent = (self.current_step / self.total_steps) * 100
+
+        return self.current_step
+
+    def complete_step(self, step_number: int = None):
+        """Complete a step and log duration."""
+        step_num = step_number or self.current_step
+        if step_num in self.step_start_times:
+            duration = time.time() - self.step_start_times[step_num]
+            return duration
+        return 0.0
+
+    def get_progress_summary(self) -> Dict[str, Any]:
+        """Get detailed progress summary."""
         return {
-            "agent_id": self.agent_id,
-            "agent_name": self.agent_name,
-            "agent_type": self.__class__.__name__,
-            "status": self.status.value,
-            "capabilities": self.get_capabilities(),
-            "current_task": asdict(self.current_task) if self.current_task else None,
-            "queue_size": len(self.task_queue),
-            "metrics": asdict(self.metrics)
+            "total_steps": self.total_steps,
+            "current_step": self.current_step,
+            "progress_percent": self.task.progress_percent,
+            "completed_steps": list(self.step_descriptions.keys()),
+            "current_description": self.step_descriptions.get(self.current_step, "")
         }
 
-    def pause(self):
-        """Pause the agent (if currently running)."""
-        if self.status == AgentStatus.RUNNING:
-            self.status = AgentStatus.PAUSED
-            self.logger.info("Agent paused", agent_id=self.agent_id)
 
-    def resume(self):
-        """Resume the agent (if paused)."""
-        if self.status == AgentStatus.PAUSED:
-            self.status = AgentStatus.RUNNING
-            self.logger.info("Agent resumed", agent_id=self.agent_id)
+class EnhancedBaseAgent(BaseAgent):
+    """Enhanced base agent with additional production features."""
 
-    def clear_queue(self):
-        """Clear all pending tasks."""
-        cleared_count = len(self.task_queue)
-        self.task_queue.clear()
-        self.logger.info("Task queue cleared",
-                         agent_id=self.agent_id,
-                         cleared_tasks=cleared_count)
+    def __init__(self, agent_id: str = None, agent_name: str = None):
+        super().__init__(agent_id, agent_name)
 
-    def get_cached_result(self, cache_key: str) -> Optional[Any]:
-        """Get cached result from state manager."""
-        return self.state_manager.load_state(cache_key, StateType.AGENT_PROGRESS)
+        # Enhanced features
+        self.task_dependencies: Dict[str, List[str]] = {}
+        self.task_callbacks: Dict[str, List[Callable]] = {}
+        self.health_check_interval = 30  # seconds
+        self.last_health_check = time.time()
 
-    def cache_result(self, cache_key: str, result: Any, ttl_hours: int = 24):
-        """Cache a result in state manager."""
-        self.state_manager.save_state(
-            cache_key, result, StateType.AGENT_PROGRESS, ttl_hours=ttl_hours
-        )
+        # Circuit breaker for database connections
+        self.db_failure_count = 0
+        self.db_circuit_open = False
+        self.db_circuit_reset_time = None
+
+        # Performance optimization
+        self.result_cache_size = 100
+        self.recent_results: Dict[str, Any] = {}
+
+    def add_task_with_dependencies(
+            self,
+            task_type: str,
+            description: str,
+            dependencies: List[str] = None,
+            callback: Callable = None,
+            **kwargs
+    ) -> str:
+        """Add task with dependency management."""
+        task_id = self.add_task(task_type, description, **kwargs)
+
+        if dependencies:
+            self.task_dependencies[task_id] = dependencies
+
+        if callback:
+            if task_id not in self.task_callbacks:
+                self.task_callbacks[task_id] = []
+            self.task_callbacks[task_id].append(callback)
+
+        return task_id
+
+    def can_execute_task(self, task_id: str) -> bool:
+        """Check if task dependencies are satisfied."""
+        if task_id not in self.task_dependencies:
+            return True
+
+        dependencies = self.task_dependencies[task_id]
+
+        # Check if all dependencies are completed
+        for dep_id in dependencies:
+            # Look for completed task in metrics or cache
+            if not self._is_dependency_satisfied(dep_id):
+                return False
+
+        return True
+
+    def _is_dependency_satisfied(self, dependency_id: str) -> bool:
+        """Check if a dependency is satisfied."""
+        # Check recent results cache
+        if dependency_id in self.recent_results:
+            return True
+
+        # Check state manager for completed task
+        cached_result = self.get_cached_result(f"task_{dependency_id}")
+        return cached_result is not None
+
+    def run_next_task_with_dependencies(self) -> Optional[Dict[str, Any]]:
+        """Execute next task that has all dependencies satisfied."""
+        for i, task in enumerate(self.task_queue):
+            if self.can_execute_task(task.task_id):
+                # Remove from queue and execute
+                executable_task = self.task_queue.pop(i)
+                return self.run_task(executable_task)
+
+        self.logger.debug("No executable tasks (dependencies not satisfied)")
+        return None
+
+    def run_task_with_progress(self, task: AgentTask, total_steps: int = 1) -> Dict[str, Any]:
+        """Execute task with detailed progress tracking."""
+        progress_tracker = ProgressTracker(task, total_steps)
+
+        # Store progress tracker for access by execute_task implementation
+        task.parameters['_progress_tracker'] = progress_tracker
+
+        try:
+            result = self.run_task(task)
+
+            # Execute callbacks
+            if task.task_id in self.task_callbacks:
+                for callback in self.task_callbacks[task.task_id]:
+                    try:
+                        callback(task, result)
+                    except Exception as e:
+                        self.logger.warning("Task callback failed", error=str(e))
+
+            # Cache result
+            self.recent_results[task.task_id] = result
+
+            # Trim cache if too large
+            if len(self.recent_results) > self.result_cache_size:
+                oldest_key = next(iter(self.recent_results))
+                del self.recent_results[oldest_key]
+
+            return result
+
+        finally:
+            # Clean up
+            if task.task_id in self.task_dependencies:
+                del self.task_dependencies[task.task_id]
+            if task.task_id in self.task_callbacks:
+                del self.task_callbacks[task.task_id]
+
+    def health_check(self) -> Dict[str, Any]:
+        """Comprehensive health check."""
+        current_time = time.time()
+
+        # Skip if too recent
+        if current_time - self.last_health_check < self.health_check_interval:
+            return {"status": "skipped", "reason": "too_recent"}
+
+        self.last_health_check = current_time
+
+        health_status = {
+            "agent_id": self.agent_id,
+            "status": self.status.value,
+            "timestamp": datetime.now().isoformat(),
+            "checks": {}
+        }
+
+        # Database connectivity check
+        try:
+            if not self.db_circuit_open:
+                test_result = self.connector.execute_query("SELECT 1")
+                health_status["checks"]["database"] = "healthy"
+                self.db_failure_count = 0
+            else:
+                health_status["checks"]["database"] = "circuit_open"
+        except Exception as e:
+            self.db_failure_count += 1
+            health_status["checks"]["database"] = f"failed: {str(e)}"
+
+            # Open circuit breaker if too many failures
+            if self.db_failure_count >= 3:
+                self.db_circuit_open = True
+                self.db_circuit_reset_time = current_time + 300  # 5 minutes
+
+        # Check if circuit should be reset
+        if self.db_circuit_open and current_time > (self.db_circuit_reset_time or 0):
+            self.db_circuit_open = False
+            self.db_failure_count = 0
+
+        # Memory usage check
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            health_status["checks"]["memory_mb"] = memory_mb
+            health_status["checks"]["memory_status"] = "healthy" if memory_mb < 1000 else "high"
+        except ImportError:
+            health_status["checks"]["memory"] = "psutil_not_available"
+
+        # Task queue health
+        health_status["checks"]["task_queue_size"] = len(self.task_queue)
+        health_status["checks"]["task_queue_status"] = "healthy" if len(self.task_queue) < 100 else "backlogged"
+
+        # Metrics health
+        health_status["checks"]["success_rate"] = self.metrics.success_rate
+        health_status["checks"]["metrics_status"] = "healthy" if self.metrics.success_rate > 0.8 else "degraded"
+
+        return health_status
+
+    def get_enhanced_status(self) -> Dict[str, Any]:
+        """Get enhanced status with additional details."""
+        base_status = self.get_status()
+
+        enhanced_status = {
+            **base_status,
+            "health_check": self.health_check(),
+            "task_dependencies": len(self.task_dependencies),
+            "cached_results": len(self.recent_results),
+            "database_circuit_open": self.db_circuit_open,
+            "executable_tasks": sum(1 for task in self.task_queue if self.can_execute_task(task.task_id))
+        }
+
+        return enhanced_status
 
 
-class TestAgent(BaseAgent):
-    """Test agent implementation for demonstration."""
+class MultiStepAgent(EnhancedBaseAgent):
+    """Example agent that demonstrates multi-step task execution."""
 
     def get_capabilities(self) -> List[str]:
-        """Return test agent capabilities."""
-        return [
-            "database_connection_test",
-            "simple_query_execution",
-            "state_management_test",
-            "error_handling_demo"
-        ]
+        return ["multi_step_analysis", "data_validation", "report_generation"]
 
     def execute_task(self, task: AgentTask) -> Dict[str, Any]:
-        """Execute test tasks."""
+        """Execute multi-step task with progress tracking."""
         task_type = task.task_type
-        parameters = task.parameters
 
-        if task_type == "database_connection_test":
-            return self._test_database_connection()
-
-        elif task_type == "simple_query_execution":
-            query = parameters.get("query", "SELECT CURRENT_DATABASE(), CURRENT_SCHEMA()")
-            return self._execute_simple_query(query)
-
-        elif task_type == "state_management_test":
-            return self._test_state_management()
-
-        elif task_type == "error_handling_demo":
-            error_type = parameters.get("error_type", "simple")
-            return self._demo_error_handling(error_type)
-
+        if task_type == "multi_step_analysis":
+            return self._execute_multi_step_analysis(task)
+        elif task_type == "data_validation":
+            return self._execute_data_validation(task)
         else:
             raise DataDiscoveryException(f"Unknown task type: {task_type}")
 
-    def _test_database_connection(self) -> Dict[str, Any]:
-        """Test database connectivity."""
-        self.logger.info("Testing database connection")
+    def _execute_multi_step_analysis(self, task: AgentTask) -> Dict[str, Any]:
+        """Example multi-step analysis with progress tracking."""
+        progress = task.parameters.get('_progress_tracker')
+        results = {}
 
-        result = self.connector.execute_query("SELECT CURRENT_USER(), CURRENT_WAREHOUSE()")
+        # Step 1: Database connection
+        if progress:
+            progress.start_step("database_connection", "Connecting to database")
 
+        connection_result = self.connector.execute_query("SELECT CURRENT_DATABASE()")
+        results["database"] = connection_result.data[0]["CURRENT_DATABASE()"]
+
+        if progress:
+            duration = progress.complete_step()
+            self.logger.debug("Database connection completed", duration_seconds=duration)
+
+        # Step 2: Schema discovery
+        if progress:
+            progress.start_step("schema_discovery", "Discovering schema structure")
+
+        time.sleep(1)  # Simulate work
+        results["schema_discovered"] = True
+
+        if progress:
+            duration = progress.complete_step()
+            self.logger.debug("Schema discovery completed", duration_seconds=duration)
+
+        # Step 3: Data analysis
+        if progress:
+            progress.start_step("data_analysis", "Analyzing data patterns")
+
+        time.sleep(1)  # Simulate work
+        results["patterns_found"] = 5
+
+        if progress:
+            duration = progress.complete_step()
+            self.logger.debug("Data analysis completed", duration_seconds=duration)
+
+        return results
+
+    def _execute_data_validation(self, task: AgentTask) -> Dict[str, Any]:
+        """Example data validation task."""
+        # Simple validation example
         return {
-            "status": "success",
-            "connection_test": "passed",
-            "current_user": result.data[0]["CURRENT_USER()"],
-            "current_warehouse": result.data[0]["CURRENT_WAREHOUSE()"],
-            "execution_time": result.execution_time_seconds
+            "validation_status": "passed",
+            "records_validated": 1000,
+            "errors_found": 0
         }
 
-    def _execute_simple_query(self, query: str) -> Dict[str, Any]:
-        """Execute a simple SQL query."""
-        self.logger.info("Executing query", query=query[:100])
 
-        result = self.connector.execute_query(query)
+# Example usage of enhanced framework
+def example_enhanced_agent_usage():
+    """Demonstrate enhanced agent capabilities."""
 
-        return {
-            "status": "success",
-            "query": query,
-            "row_count": result.row_count,
-            "columns": result.columns,
-            "execution_time": result.execution_time_seconds,
-            "sample_data": result.data[:3]  # First 3 rows
-        }
+    # Create enhanced agent
+    agent = MultiStepAgent(agent_name="EnhancedDemo")
 
-    def _test_state_management(self) -> Dict[str, Any]:
-        """Test state management functionality."""
-        self.logger.info("Testing state management")
+    # Add task with dependencies and callback
+    def task_completion_callback(task: AgentTask, result: Dict[str, Any]):
+        print(f"Task {task.task_id} completed with result: {result}")
 
-        # Save some test data
-        test_data = {
-            "timestamp": datetime.now().isoformat(),
-            "agent_id": self.agent_id,
-            "test_value": "state_management_test"
-        }
+    # Add validation task (no dependencies)
+    validation_task_id = agent.add_task_with_dependencies(
+        task_type="data_validation",
+        description="Validate data quality",
+        priority=TaskPriority.HIGH,
+        callback=task_completion_callback
+    )
 
-        cache_key = f"test_state_{self.agent_id}"
-        self.cache_result(cache_key, test_data, ttl_hours=1)
+    # Add analysis task (depends on validation)
+    analysis_task_id = agent.add_task_with_dependencies(
+        task_type="multi_step_analysis",
+        description="Perform comprehensive analysis",
+        dependencies=[validation_task_id],
+        priority=TaskPriority.MEDIUM,
+        callback=task_completion_callback
+    )
 
-        # Load it back
-        loaded_data = self.get_cached_result(cache_key)
+    # Execute tasks with dependency resolution
+    while agent.task_queue:
+        result = agent.run_next_task_with_dependencies()
+        if result is None:
+            print("No executable tasks available")
+            break
+        print(f"Task completed: {result}")
 
-        return {
-            "status": "success",
-            "cached_data": test_data,
-            "loaded_data": loaded_data,
-            "cache_working": loaded_data is not None
-        }
-
-    def _demo_error_handling(self, error_type: str) -> Dict[str, Any]:
-        """Demonstrate error handling."""
-        self.logger.info("Demonstrating error handling", error_type=error_type)
-
-        if error_type == "database_error":
-            # This will cause a SQL error
-            self.connector.execute_query("SELECT * FROM non_existent_table")
-
-        elif error_type == "timeout_error":
-            # Simulate a long operation
-            time.sleep(10)
-
-        elif error_type == "simple":
-            raise ValueError("This is a test error for demonstration")
-
-        return {"status": "success", "message": "No error occurred"}
+    # Show enhanced status
+    status = agent.get_enhanced_status()
+    print(f"Agent status: {status}")
 
 
-# Testing and demonstration
 if __name__ == "__main__":
-    print("Testing Base Agent Framework")
-    print("=" * 50)
-
-    try:
-        # Create test agent
-        print("🤖 Creating test agent...")
-        agent = TestAgent(agent_name="TestAgent_Demo")
-
-        print(f"✅ Agent created: {agent.agent_id}")
-        print(f"   Name: {agent.agent_name}")
-        print(f"   Capabilities: {', '.join(agent.get_capabilities())}")
-
-        # Test 1: Database connection test
-        print(f"\n🔍 Test 1: Database Connection")
-        task_id = agent.add_task(
-            task_type="database_connection_test",
-            description="Test database connectivity",
-            priority=TaskPriority.HIGH
-        )
-
-        result = agent.run_next_task()
-        print(f"✅ Database test completed")
-        print(f"   User: {result['current_user']}")
-        print(f"   Warehouse: {result['current_warehouse']}")
-        print(f"   Execution time: {result['execution_time']:.3f}s")
-
-        # Test 2: Simple query execution
-        print(f"\n🔍 Test 2: Query Execution")
-        agent.add_task(
-            task_type="simple_query_execution",
-            description="Execute simple query",
-            parameters={
-                "query": "SELECT COUNT(*) as table_count FROM information_schema.tables WHERE table_schema = 'TPCDS_SF10TCL'"},
-            priority=TaskPriority.MEDIUM
-        )
-
-        result = agent.run_next_task()
-        print(f"✅ Query executed successfully")
-        print(f"   Rows returned: {result['row_count']}")
-        print(f"   Columns: {result['columns']}")
-        print(f"   Sample data: {result['sample_data']}")
-
-        # Test 3: State management
-        print(f"\n🔍 Test 3: State Management")
-        agent.add_task(
-            task_type="state_management_test",
-            description="Test state caching",
-            priority=TaskPriority.LOW
-        )
-
-        result = agent.run_next_task()
-        print(f"✅ State management test completed")
-        print(f"   Cache working: {result['cache_working']}")
-        print(f"   Data round-trip: {'Success' if result['cached_data'] == result['loaded_data'] else 'Failed'}")
-
-        # Test 4: Error handling (safe error)
-        print(f"\n🔍 Test 4: Error Handling")
-        try:
-            agent.add_task(
-                task_type="error_handling_demo",
-                description="Demonstrate error handling",
-                parameters={"error_type": "simple"}
-            )
-            agent.run_next_task()
-        except Exception as e:
-            print(f"✅ Error handling working correctly")
-            print(f"   Error caught: {type(e).__name__}")
-            print(f"   Error message: {str(e)[:100]}")
-
-        # Show agent status and metrics
-        print(f"\n📊 Agent Status and Metrics:")
-        status = agent.get_status()
-        metrics = status['metrics']
-
-        print(f"   Status: {status['status']}")
-        print(f"   Tasks completed: {metrics['total_tasks_completed']}")
-        print(f"   Tasks failed: {metrics['total_tasks_failed']}")
-        print(f"   Success rate: {metrics['success_rate']:.1%}")
-        print(f"   Average task time: {metrics['average_task_time_seconds']:.2f}s")
-
-        print(f"\n✅ Base agent framework tested successfully!")
-        print(f"   Core functionality: Task execution, error handling, state management")
-        print(f"   Integration: Database connector, logging, state manager")
-        print(f"   Patterns: Retry logic, progress tracking, metrics")
-        print(f"\n🚀 Ready to build specialized agents!")
-
-    except Exception as e:
-        print(f"❌ Test failed: {str(e)}")
-        print(f"   Check that core systems are working properly")
+    example_enhanced_agent_usage()
