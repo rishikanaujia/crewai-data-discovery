@@ -73,13 +73,13 @@ class DataDiscoveryException(Exception):
     """
 
     def __init__(
-            self,
-            message: str,
-            category: ErrorCategory = ErrorCategory.UNKNOWN,
-            severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-            context: Optional[ErrorContext] = None,
-            recovery_suggestions: Optional[List[str]] = None,
-            original_exception: Optional[Exception] = None
+        self,
+        message: str,
+        category: ErrorCategory = ErrorCategory.UNKNOWN,
+        severity: ErrorSeverity = ErrorSeverity.MEDIUM,
+        context: Optional[ErrorContext] = None,
+        recovery_suggestions: Optional[List[str]] = None,
+        original_exception: Optional[Exception] = None,
     ):
         super().__init__(message)
         self.message = message
@@ -89,17 +89,15 @@ class DataDiscoveryException(Exception):
         self.recovery_suggestions = recovery_suggestions or []
         self.original_exception = original_exception
         self.error_id = self._generate_error_id()
-
-        # Capture stack trace
         self.stack_trace = traceback.format_exc()
 
     def _generate_error_id(self) -> str:
         """Generate a unique error ID for tracking."""
         import hashlib
-        import uuid
 
-        # Create a unique identifier based on error details
-        error_string = f"{self.category.value}_{self.severity.value}_{self.message}_{datetime.now().isoformat()}"
+        error_string = (
+            f"{self.category.value}_{self.severity.value}_{self.message}_{datetime.now().isoformat()}"
+        )
         error_hash = hashlib.md5(error_string.encode()).hexdigest()[:8]
         return f"{self.category.value.upper()}_{error_hash}"
 
@@ -112,32 +110,35 @@ class DataDiscoveryException(Exception):
             "severity": self.severity.value,
             "context": self.context.to_dict(),
             "recovery_suggestions": self.recovery_suggestions,
-            "original_exception": str(self.original_exception) if self.original_exception else None,
-            "stack_trace": self.stack_trace
+            "original_exception": str(self.original_exception)
+            if self.original_exception
+            else None,
+            "stack_trace": self.stack_trace,
         }
 
     def get_user_friendly_message(self) -> str:
         """Get a user-friendly version of the error message."""
         if self.recovery_suggestions:
-            suggestions = "\n".join(f"• {suggestion}" for suggestion in self.recovery_suggestions)
+            suggestions = "\n".join(
+                f"• {suggestion}" for suggestion in self.recovery_suggestions
+            )
             return f"{self.message}\n\nSuggestions:\n{suggestions}"
         return self.message
 
 
-# Configuration Exceptions
+# ---------------- Configuration Exceptions ----------------
 class ConfigurationError(DataDiscoveryException):
     """Errors related to system configuration."""
 
     def __init__(self, message: str, config_key: Optional[str] = None, **kwargs):
-        context = kwargs.get('context', ErrorContext())
-        context.additional_info['config_key'] = config_key
-
+        context = kwargs.pop("context", ErrorContext())
+        context.additional_info["config_key"] = config_key
         super().__init__(
             message=message,
             category=ErrorCategory.CONFIGURATION,
             severity=ErrorSeverity.HIGH,
             context=context,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -148,35 +149,32 @@ class InvalidConfigurationError(ConfigurationError):
         message = f"Invalid configuration for '{config_key}'"
         if expected_value:
             message += f". Expected: {expected_value}"
-
         recovery_suggestions = [
             f"Check the '{config_key}' setting in your configuration",
             "Verify environment variables are set correctly",
-            "Review the configuration documentation"
+            "Review the configuration documentation",
         ]
-
         super().__init__(
             message=message,
             config_key=config_key,
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            **kwargs,
         )
 
 
-# Connection Exceptions
+# ---------------- Connection Exceptions ----------------
 class ConnectionError(DataDiscoveryException):
     """Errors related to database connections."""
 
     def __init__(self, message: str, database: Optional[str] = None, **kwargs):
-        context = kwargs.get('context', ErrorContext())
+        context = kwargs.pop("context", ErrorContext())
         context.database = database
-
         super().__init__(
             message=message,
             category=ErrorCategory.CONNECTION,
             severity=ErrorSeverity.HIGH,
             context=context,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -184,21 +182,20 @@ class SnowflakeConnectionError(ConnectionError):
     """Specific errors for Snowflake database connections."""
 
     def __init__(self, message: str, account: Optional[str] = None, **kwargs):
-        context = kwargs.get('context', ErrorContext())
-        context.additional_info['snowflake_account'] = account
-
+        context = kwargs.pop("context", ErrorContext())
+        context.additional_info["snowflake_account"] = account
         recovery_suggestions = [
             "Verify Snowflake account, username, and password",
             "Check network connectivity to Snowflake",
             "Ensure the Snowflake warehouse is running",
             "Verify the database and schema exist",
-            "Check if your IP is whitelisted"
+            "Check if your IP is whitelisted",
         ]
-
         super().__init__(
             message=f"Snowflake connection failed: {message}",
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            context=context,
+            **kwargs,
         )
 
 
@@ -207,23 +204,21 @@ class DatabaseTimeoutError(ConnectionError):
 
     def __init__(self, operation: str, timeout_seconds: int, **kwargs):
         message = f"Database operation '{operation}' timed out after {timeout_seconds} seconds"
-
         recovery_suggestions = [
             "Increase the query timeout setting",
             "Optimize the query for better performance",
             "Check database load and performance",
-            "Consider breaking large operations into smaller chunks"
+            "Consider breaking large operations into smaller chunks",
         ]
-
         super().__init__(
             message=message,
             category=ErrorCategory.TIMEOUT,
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            **kwargs,
         )
 
 
-# Authentication and Permission Exceptions
+# ---------------- Authentication & Permission Exceptions ----------------
 class AuthenticationError(DataDiscoveryException):
     """Authentication-related errors."""
 
@@ -232,15 +227,14 @@ class AuthenticationError(DataDiscoveryException):
             "Verify your username and password",
             "Check if your account is locked or expired",
             "Ensure you have access to the specified database",
-            "Contact your database administrator"
+            "Contact your database administrator",
         ]
-
         super().__init__(
             message=message,
             category=ErrorCategory.AUTHENTICATION,
             severity=ErrorSeverity.HIGH,
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -248,39 +242,36 @@ class PermissionError(DataDiscoveryException):
     """Permission and authorization errors."""
 
     def __init__(self, message: str, required_permission: Optional[str] = None, **kwargs):
-        context = kwargs.get('context', ErrorContext())
-        context.additional_info['required_permission'] = required_permission
-
+        context = kwargs.pop("context", ErrorContext())
+        context.additional_info["required_permission"] = required_permission
         recovery_suggestions = [
             "Check if you have the required permissions",
             "Contact your database administrator to grant access",
             "Verify your role has the necessary privileges",
-            "Ensure you're connected to the correct database/schema"
+            "Ensure you're connected to the correct database/schema",
         ]
-
         super().__init__(
             message=message,
             category=ErrorCategory.PERMISSION,
             severity=ErrorSeverity.HIGH,
             context=context,
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            **kwargs,
         )
 
 
-# Agent and Tool Exceptions
+# ---------------- Agent & Tool Exceptions ----------------
 class AgentError(DataDiscoveryException):
     """Errors from CrewAI agents."""
 
     def __init__(self, message: str, agent_id: str, **kwargs):
-        context = kwargs.get('context', ErrorContext())
+        context = kwargs.pop("context", ErrorContext())
         context.agent_id = agent_id
-
         super().__init__(
             message=message,
             category=ErrorCategory.AGENT_FAILURE,
             context=context,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -289,23 +280,20 @@ class AgentTimeoutError(DataDiscoveryException):
 
     def __init__(self, agent_id: str, operation: str, timeout_seconds: int, **kwargs):
         message = f"Agent '{agent_id}' timed out during '{operation}' after {timeout_seconds} seconds"
-
-        context = kwargs.get('context', ErrorContext())
+        context = kwargs.pop("context", ErrorContext())
         context.agent_id = agent_id
-
         recovery_suggestions = [
             "Increase the agent timeout setting",
             "Check if the agent is stuck in an infinite loop",
             "Verify the agent's dependencies are available",
-            "Consider simplifying the agent's task"
+            "Consider simplifying the agent's task",
         ]
-
         super().__init__(
             message=message,
             category=ErrorCategory.TIMEOUT,
             context=context,
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -313,14 +301,13 @@ class ToolError(DataDiscoveryException):
     """Errors from agent tools."""
 
     def __init__(self, message: str, tool_name: str, **kwargs):
-        context = kwargs.get('context', ErrorContext())
+        context = kwargs.pop("context", ErrorContext())
         context.tool_name = tool_name
-
         super().__init__(
             message=message,
             category=ErrorCategory.TOOL_FAILURE,
             context=context,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -328,41 +315,38 @@ class SchemaInspectionError(ToolError):
     """Errors during database schema inspection."""
 
     def __init__(self, message: str, database: Optional[str] = None, table: Optional[str] = None, **kwargs):
-        context = kwargs.get('context', ErrorContext())
+        context = kwargs.pop("context", ErrorContext())
         context.database = database
         context.table = table
-
         recovery_suggestions = [
             "Verify the database and table exist",
             "Check if you have SELECT permissions",
             "Ensure the schema is not locked",
-            "Try inspecting a smaller subset of tables"
+            "Try inspecting a smaller subset of tables",
         ]
-
         super().__init__(
             message=f"Schema inspection failed: {message}",
             tool_name="SchemaInspector",
             context=context,
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            **kwargs,
         )
 
 
-# Data Quality Exceptions
+# ---------------- Data Quality Exceptions ----------------
 class DataQualityError(DataDiscoveryException):
     """Errors related to data quality issues."""
 
     def __init__(self, message: str, table: Optional[str] = None, column: Optional[str] = None, **kwargs):
-        context = kwargs.get('context', ErrorContext())
+        context = kwargs.pop("context", ErrorContext())
         context.table = table
-        context.additional_info['column'] = column
-
+        context.additional_info["column"] = column
         super().__init__(
             message=message,
             category=ErrorCategory.DATA_QUALITY,
             severity=ErrorSeverity.MEDIUM,
             context=context,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -371,42 +355,38 @@ class InsufficientDataError(DataDiscoveryException):
 
     def __init__(self, table: str, required_rows: int, actual_rows: int):
         message = f"Table '{table}' has insufficient data: {actual_rows} rows (minimum: {required_rows})"
-
         context = ErrorContext()
         context.table = table
-
         recovery_suggestions = [
             "Choose a table with more data",
             "Lower the minimum data requirements",
             "Check if the table is still being populated",
-            "Verify data loading processes"
+            "Verify data loading processes",
         ]
-
         super().__init__(
             message=message,
             category=ErrorCategory.DATA_QUALITY,
             severity=ErrorSeverity.MEDIUM,
             context=context,
-            recovery_suggestions=recovery_suggestions
+            recovery_suggestions=recovery_suggestions,
         )
 
 
-# Validation Exceptions
+# ---------------- Validation Exceptions ----------------
 class ValidationError(DataDiscoveryException):
     """Data or input validation errors."""
 
     def __init__(self, message: str, field: Optional[str] = None, value: Optional[Any] = None, **kwargs):
-        context = kwargs.get('context', ErrorContext())
+        context = kwargs.pop("context", ErrorContext())
         context.additional_info.update({
-            'field': field,
-            'value': str(value) if value is not None else None
+            "field": field,
+            "value": str(value) if value is not None else None,
         })
-
         super().__init__(
             message=message,
             category=ErrorCategory.VALIDATION,
             context=context,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -414,38 +394,35 @@ class SQLValidationError(ValidationError):
     """SQL query validation errors."""
 
     def __init__(self, message: str, sql_query: Optional[str] = None, **kwargs):
-        context = kwargs.get('context', ErrorContext())
+        context = kwargs.pop("context", ErrorContext())
         context.query = sql_query
-
         recovery_suggestions = [
             "Check SQL syntax for errors",
             "Verify table and column names exist",
             "Ensure proper quoting and escaping",
-            "Test the query in a SQL editor first"
+            "Test the query in a SQL editor first",
         ]
-
         super().__init__(
             message=f"SQL validation failed: {message}",
             context=context,
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            **kwargs,
         )
 
 
-# Resource Exceptions
+# ---------------- Resource Exceptions ----------------
 class ResourceError(DataDiscoveryException):
     """Resource-related errors (memory, disk, etc.)."""
 
     def __init__(self, message: str, resource_type: str, **kwargs):
-        context = kwargs.get('context', ErrorContext())
-        context.additional_info['resource_type'] = resource_type
-
+        context = kwargs.pop("context", ErrorContext())
+        context.additional_info["resource_type"] = resource_type
         super().__init__(
             message=message,
             category=ErrorCategory.RESOURCE,
             severity=ErrorSeverity.HIGH,
             context=context,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -453,74 +430,49 @@ class CacheError(ResourceError):
     """Cache-related errors."""
 
     def __init__(self, message: str, cache_key: Optional[str] = None, **kwargs):
-        context = kwargs.pop('context', ErrorContext())  # Remove context from kwargs
-        context.additional_info['cache_key'] = cache_key
-
+        context = kwargs.pop("context", ErrorContext())
+        context.additional_info["cache_key"] = cache_key
         recovery_suggestions = [
             "Clear the cache and retry",
             "Check available disk space",
             "Verify cache directory permissions",
-            "Reduce cache size limits"
+            "Reduce cache size limits",
         ]
-
-        # Remove potential conflicting parameters
-        kwargs.pop('recovery_suggestions', None)
-
         super().__init__(
             message=f"Cache error: {message}",
             resource_type="cache",
             context=context,
             recovery_suggestions=recovery_suggestions,
-            **kwargs
+            **kwargs,
         )
 
 
-# Error Handler Class
+# ---------------- Error Handler ----------------
 class ErrorHandler:
     """Centralized error handling and logging."""
 
     def __init__(self, logger=None):
         self.logger = logger
-        self.error_counts = {}
+        self.error_counts: Dict[str, int] = {}
 
-    def handle_error(
-            self,
-            error: Union[DataDiscoveryException, Exception],
-            context: Optional[ErrorContext] = None
-    ) -> DataDiscoveryException:
-        """
-        Handle an error with proper logging and context.
-
-        Args:
-            error: The exception to handle
-            context: Additional context information
-
-        Returns:
-            A DataDiscoveryException (either the original or wrapped)
-        """
-        # Convert regular exceptions to DataDiscoveryException
+    def handle_error(self, error: Union[DataDiscoveryException, Exception], context: Optional[ErrorContext] = None) -> DataDiscoveryException:
+        """Handle an error with proper logging and context."""
         if not isinstance(error, DataDiscoveryException):
             error = DataDiscoveryException(
                 message=str(error),
                 category=ErrorCategory.UNKNOWN,
                 context=context,
-                original_exception=error
+                original_exception=error,
             )
-
-        # Update error counts
         error_key = f"{error.category.value}_{error.severity.value}"
         self.error_counts[error_key] = self.error_counts.get(error_key, 0) + 1
-
-        # Log the error
         if self.logger:
             self._log_error(error)
-
         return error
 
     def _log_error(self, error: DataDiscoveryException):
         """Log the error with appropriate level."""
         error_dict = error.to_dict()
-
         if error.severity == ErrorSeverity.CRITICAL:
             self.logger.critical(f"CRITICAL ERROR [{error.error_id}]: {error.message}", extra=error_dict)
         elif error.severity == ErrorSeverity.HIGH:
@@ -539,41 +491,35 @@ class ErrorHandler:
         self.error_counts.clear()
 
 
-# Test and demonstration
+# ---------------- Test & Demonstration ----------------
 if __name__ == "__main__":
     print("Testing Data Discovery Exception System")
     print("=" * 50)
 
-    # Test basic exception creation
     try:
         raise DataDiscoveryException(
             message="Test exception for demonstration",
             category=ErrorCategory.AGENT_FAILURE,
             severity=ErrorSeverity.MEDIUM,
-            recovery_suggestions=["This is a test", "Try again later"]
+            recovery_suggestions=["This is a test", "Try again later"],
         )
     except DataDiscoveryException as e:
-        print(f"✅ Basic exception created:")
+        print("✅ Basic exception created:")
         print(f"   Error ID: {e.error_id}")
         print(f"   Category: {e.category.value}")
         print(f"   Severity: {e.severity.value}")
         print(f"   Message: {e.message}")
         print(f"   Suggestions: {len(e.recovery_suggestions)} items")
 
-    print()
-
-    # Test specific exception types
     exceptions_to_test = [
         InvalidConfigurationError("SNOWFLAKE_ACCOUNT", "valid account name"),
         SnowflakeConnectionError("Invalid credentials", account="demo-account"),
         AgentTimeoutError("technical_analyst", "schema_discovery", 30),
-        # SchemaInspectionError("Permission denied", database="DEMO_DB", table="CUSTOMERS"),
         SQLValidationError("Syntax error near 'SELCT'", sql_query="SELCT * FROM users"),
-        CacheError("Disk full", cache_key="schema_metadata")
+        CacheError("Disk full", cache_key="schema_metadata"),
     ]
 
     error_handler = ErrorHandler()
-
     for i, exc in enumerate(exceptions_to_test, 1):
         handled_error = error_handler.handle_error(exc)
         print(f"✅ Exception {i}: {exc.__class__.__name__}")
@@ -583,13 +529,12 @@ if __name__ == "__main__":
         print(f"   Recovery suggestions: {len(handled_error.recovery_suggestions)}")
         print()
 
-    # Show error summary
     print("📊 Error Summary:")
     summary = error_handler.get_error_summary()
     for error_type, count in summary.items():
         print(f"   {error_type}: {count}")
 
-    print(f"\n✅ Exception system tested successfully!")
+    print("\n✅ Exception system tested successfully!")
     print(f"   Total exception types: {len(exceptions_to_test)}")
     print(f"   Error categories: {len(ErrorCategory)}")
     print(f"   Severity levels: {len(ErrorSeverity)}")
